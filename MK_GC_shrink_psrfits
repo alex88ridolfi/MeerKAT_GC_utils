@@ -1,0 +1,354 @@
+#!/usr/bin/env python2
+
+#################### ALESSANDRO RIDOLFI ########################
+
+
+
+import subprocess, warnings
+import os, os.path, sys, glob, time, datetime
+import psrfits
+
+
+if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    
+string_version = "0.2-alpha (02Mar2020)"
+
+def make_slurm_script(basename, log_filename, cmd_psrfits_subband):
+    slurm_script_filename = "script_slurm_%s.txt" % (basename)
+    print "slurm_script_filename =  %s" % slurm_script_filename
+    print "os.getcwd() = ", os.getcwd()
+    slurm_script_file = open(slurm_script_filename, "w")
+
+    slurm_script_file.write("#!/bin/bash\n")
+    slurm_script_file.write("\n")
+    slurm_script_file.write("\n")
+    slurm_script_file.write("\n")
+    slurm_script_file.write("sbatch -J %s -o %s -t 2000:00 --nodes=1 --cpus-per-task=1 --mem=2GB --wrap='%s'" % (basename, log_filename, cmd_psrfits_subband ))
+
+    slurm_script_file.close()
+
+
+    return os.path.abspath(slurm_script_filename)
+
+
+
+class Observation(object):
+        def __init__(self, file_name, data_type="psrfits"):
+                self.file_abspath = os.path.abspath(file_name)
+                self.file_nameonly = self.file_abspath.split("/")[-1]
+                self.file_basename, self.file_extension = os.path.splitext(self.file_nameonly)
+
+
+                if data_type=="psrfits":
+                        #print "Reading PSRFITS...."
+                        if psrfits.is_PSRFITS(file_name) == False:
+                                raise TypeError("ERROR: DATA_TYPE=\"psrfits\" but the input file \"%s\" does not seem to be a PSRFITS file!" % (file_name))
+
+                        object_file = psrfits.PsrfitsFile(self.file_abspath)
+                        self.bw_MHz           = object_file.specinfo.BW
+                        self.N_samples        = object_file.specinfo.N
+                        self.T_obs_s          = object_file.specinfo.T
+                        self.backend          = object_file.specinfo.backend
+                        self.nbits            = object_file.specinfo.bits_per_sample
+                        self.date_obs         = object_file.specinfo.date_obs
+                        self.dec_deg          = object_file.specinfo.dec2000
+                        self.dec_str          = object_file.specinfo.dec_str
+                        self.chanbw_MHz       = object_file.specinfo.df
+                        self.t_samp_s         = object_file.specinfo.dt
+                        self.freq_central_MHz = object_file.specinfo.fctr
+                        self.receiver         = object_file.specinfo.frontend
+                        self.freq_high_MHz    = object_file.specinfo.hi_freq
+                        self.freq_low_MHz     = object_file.specinfo.lo_freq
+                        self.MJD_int          = object_file.specinfo.mjd
+                        self.nchan            = object_file.specinfo.num_channels
+                        self.observer         = object_file.specinfo.observer
+                        self.project          = object_file.specinfo.project_id
+                        self.ra_deg           = object_file.specinfo.ra2000
+                        self.ra_str           = object_file.specinfo.ra_str
+                        self.seconds_of_day   = object_file.specinfo.secs
+                        self.source_name      = object_file.specinfo.source
+                        self.telescope        = object_file.specinfo.telescope
+                        self.dm               = object_file.specinfo.chan_dm
+
+
+
+
+def execute_and_log(command, work_dir, log_abspath, dict_envs={}, flag_append=0):
+        datetime_start = (datetime.datetime.now()).strftime("%Y/%m/%d  %H:%M")
+        time_start = time.time()
+        if flag_append == 1:
+                flag_open_mode = "a"
+        else:
+                flag_open_mode = "w+"
+        log_file = open("%s" % (log_abspath), flag_open_mode)
+
+        log_file.write("****************************************************************\n")
+        log_file.write("START DATE AND TIME: %s\n" % (datetime_start))
+        log_file.write("\nCOMMAND:\n")
+        log_file.write("%s\n\n" % (command))
+        log_file.write("WORKING DIRECTORY: %s\n" % (work_dir))
+        log_file.write("****************************************************************\n")
+        log_file.flush()
+
+        list_for_Popen = command.split()
+        env_subprocess = os.environ.copy()
+        if dict_envs: #If the dictionary is not empty                                                                                                       
+                for k in dict_envs.keys():
+                        env_subprocess[k] = dict_envs[k]
+
+        proc = subprocess.Popen(list_for_Popen, stdout=log_file, stderr=log_file, cwd=work_dir, env=env_subprocess)
+        proc.communicate()  #Wait for the process to complete
+
+        datetime_end = (datetime.datetime.now()).strftime("%Y/%m/%d  %H:%M")
+        time_end = time.time()
+
+        log_file.write("\nEND DATE AND TIME: %s\n" % (datetime_end))
+        log_file.write("\nTOTAL TIME TAKEN: %d s\n" % (time_end - time_start))
+        log_file.close()
+
+
+def get_command_output(command):
+        list_for_Popen = command.split()
+        proc = subprocess.Popen(list_for_Popen, stdout=subprocess.PIPE)
+        out, err = proc.communicate()
+        return out
+
+def get_command_output_with_pipe(command1, command2):
+        list_for_Popen_cmd1 = command1.split()
+        list_for_Popen_cmd2 = command2.split()
+        p1 = subprocess.Popen(list_for_Popen_cmd1, stdout=subprocess.PIPE)
+        p2 = subprocess.Popen(list_for_Popen_cmd2, stdin=p1.stdout, stdout=subprocess.PIPE)
+        p1.stdout.close()  # Allow p1 to receive a SIGPIPE if p2 exits.
+        out, err = p2.communicate()
+        return out
+
+
+        
+
+###################################################
+# DEFAULT PARAMETERS
+###################################################
+time_factor = 1
+freq_factor = 1
+str_polarization = "total_intensity"
+verbosity_level = 1
+str_other_options = ""
+flag_log = 1
+total_run_time = 0
+out_nbits = 8
+outfile_name = ""
+
+###################################################
+# SHELL ARGUMENTS
+###################################################
+if (len(sys.argv) == 1 or ("-h" in sys.argv) or ("-help" in sys.argv) or ("--help" in sys.argv)):
+	print "USAGE: %s -files \"*.sf\" [-pol {total_intensity | full_stokes}] [ -time_factor  N ]  [-freq_factor N] [-nbits N] [-other_options \"-option1 ...\"] [-o myoutfile_name]" % (os.path.basename(sys.argv[0]))
+        print
+        print "%15s    %-40s:  %-50s" % ("-h", "", "Print help")
+        print "%15s    %-40s:  %-50s %s" % ("-files", "\"*.sf\"", "PSRFITS search-mode files", "")
+        print "%15s    %-40s:  %-50s" % ("-pol",         "{total_intensity | full_stokes}", "Output Total Intensity or Full Stokes data (default: total_intensity)")
+        print "%15s    %-40s:  %-50s" % ("-time_factor", "[power of 2]", "Time decimation factor (default: 1)")
+        print "%15s    %-40s:  %-50s" % ("-freq_factor", "[power of 2]", "Frequency channel decimation factor (default: 1)")
+        print "%15s    %-40s:  %-50s" % ("-nbits", "{2,4,8}", "Number of output bits per sample (default: 8)")
+        print "%15s    %-40s:  %-50s" % ("-other_options", "\"-option1 -option2 ...\"", "String with additional options for psrfits_subband (default: None)")
+        print "%15s    %-40s:  %-50s" % ("-o", "<outfile_name>", "Output file name")
+        print "%15s    %-40s:  %-50s" % ("-Q", "", "Quiet mode - do not print anything")
+        print "%15s    %-40s:  %-50s" % ("-V", "", "Very verbose mode - print many info to debug issues")
+        print "%15s    %-40s:  %-50s" % ("-version", "", "Print the version of this code")
+	exit()
+else:
+	for j in range( 1, len(sys.argv)):
+                if (sys.argv[j] == "-par"):
+                        parfile_abspath = os.path.abspath(sys.argv[j+1])
+                elif (sys.argv[j] == "-files"):
+			string_files = sys.argv[j+1]
+			if ("*" in string_files) or ("?" in string_files):
+				list_files = [ os.path.abspath(x) for x in sorted(glob.glob(string_files.strip("\"")))]
+			else:
+				list_files = [ os.path.abspath(x) for x in string_files.replace(" ", "").split(",")]
+
+                elif (sys.argv[j] == "-time_factor"):
+                        time_factor = int(sys.argv[j+1]) 
+                                                                                
+		elif (sys.argv[j] == "-freq_factor"):
+                        freq_factor = int(sys.argv[j+1])
+
+		elif (sys.argv[j] == "-nbits"):
+                        out_nbits = int(sys.argv[j+1])
+                        if out_nbits != 2 and out_nbits != 4 and out_nbits != 8:
+                                print
+                                print "ERROR! '%s' is an invalid argument for the -nbits option! Choose among 2, 4 and 8'." % (out_nbits)
+                                exit()
+
+		elif (sys.argv[j] == "-other_options"):
+                        str_other_options = sys.argv[j+1]
+
+
+		elif (sys.argv[j] == "-o"):
+                        outfile_name = sys.argv[j+1]
+                        outfile_abspath = os.path.abspath(sys.argv[j+1]) + "_0001.fits"
+                        outfile_basename = os.path.basename(outfile_abspath)
+                elif (sys.argv[j] == "-pol"):
+                        str_polarization = sys.argv[j+1]
+                        if str_polarization!="total_intensity" and str_polarization!="full_stokes":
+                                print
+                                print "ERROR! '%s' is an invalid argument for the -pol option! Choose between 'total_intensity' and 'full_stokes'." % (str_polarization)
+                                print
+                                exit()
+                                
+
+                elif (sys.argv[j] == "-Q"):
+                        verbosity_level = 0
+
+                elif (sys.argv[j] == "-V"):
+                        verbosity_level = 2
+
+                elif (sys.argv[j] == "-version") or (sys.argv[j] == "--version") or (sys.argv[j] == "-v"):
+                        print "Version: %s" % (string_version)
+                        exit()
+
+N_files = len(list_files)
+
+if (verbosity_level >= 1):
+        print
+        print "#"*62
+        print "#" + " "*20 + "%s" % ("%s" % os.path.basename(sys.argv[0])) + " "*20 + "#"   
+        print "#" + " "*22 + "%s" % (string_version) + " "*23 + "#"
+        print "#"*62
+        print
+        print "-"*62
+
+        print "List of files to process:"
+        for i in range(N_files):
+                print "%3d) %s " % (i+1, list_files[i])
+
+        print
+        print
+        print "%40s: %12s" % ("Number of files to process", N_files)
+        print "%40s: %12d" % ("Time decimation factor", time_factor)
+        print "%40s: %12d" % ("Frequency decimation factor", freq_factor)
+        print "%40s: %s" % ("Other psrfits_subband options", str_other_options)
+        print "-"*62
+        print
+
+
+
+first_Observation = Observation(list_files[0])
+source_name = first_Observation.source_name
+MJD = first_Observation.MJD_int
+freq = first_Observation.freq_central_MHz
+nchan = first_Observation.nchan
+nbits = first_Observation.nbits
+bw_MHz = first_Observation.bw_MHz
+t_samp_s = first_Observation.t_samp_s
+dm = first_Observation.dm
+
+output_nsub = nchan / freq_factor
+output_us = int(t_samp_s * time_factor * 1.0e6)
+
+
+
+if str_polarization == "total_intensity":
+        str_pol_option = "-onlyI"
+        str_pol_suffix = "_onlyI"
+elif str_polarization == "full_stokes":
+        str_pol_option = ""
+	str_pol_suffix = "_FS"
+
+if outfile_name == "":
+        outfile_basename = "%s_%s_%dus_c%s%s" % (source_name, MJD, output_us, output_nsub, str_pol_suffix) 
+
+final_file_name = "%s_0001.fits" % (outfile_basename)
+#print "final_file_name = ", final_file_name
+if os.path.exists(final_file_name):
+        print
+        print
+        str_answer = raw_input("WARNING: File '%s' already exists. Overwrite? (y/n): " % (final_file_name))
+        if str_answer == 'y' or str_answer == 'Y':
+                print "Removing '%s'..." % (os.path.abspath(final_file_name)) ,; sys.stdout.flush()
+                os.remove(os.path.abspath(final_file_name))
+                print "done."
+                print
+        else:
+                exit()
+
+        
+log_abspath = os.path.join(os.path.dirname(outfile_abspath), "LOG-MK_GC_shrink_psrfits-%s.txt" % (outfile_basename))
+
+if verbosity_level >= 1:
+        print
+        print "Check consistency of files...",
+
+for i in range(N_files):
+        current_obs = Observation(list_files[i])
+
+        if verbosity_level >= 2:
+                print
+                print "File '%s'" % (list_files[i])
+                print "%10s = %s" % ("source_name", current_obs.source_name)
+                print "%10s = %s" % ("freq", current_obs.freq_central_MHz)
+                print "%10s = %s" % ("nchan", current_obs.nchan)
+                print "%10s = %s" % ("nbits", current_obs.nbits)
+                print "%10s = %s" % ("bw_MHz", current_obs.bw_MHz)
+                print "%10s = %s" % ("t_samp_s", current_obs.t_samp_s)
+                print "%10s = %s" % ("dm", current_obs.dm)
+                print "%10s = %s" % ("MJD", current_obs.MJD_int)
+                
+        if freq != current_obs.freq_central_MHz:
+                print "Error! Frequency mismatch!"
+                exit()
+        if nchan != current_obs.nchan:
+                print "Error! Number of channel mismatch!"
+                exit()
+
+        if nbits != current_obs.nbits:
+                print "Error! Number of bits per sample mismatch!"
+                exit()
+
+        if bw_MHz != current_obs.bw_MHz:
+                print "Error! Bandwidth mismatch!"
+                exit()
+
+        if t_samp_s != current_obs.t_samp_s:
+                print "Error! Sampling time mismatch!"
+                exit()
+
+        if dm != current_obs.dm:
+                print "Error! Dispersion Measure mismatch!"
+                exit()
+
+
+if (verbosity_level >= 1):
+        print "good!"
+        print "All files seem consistent."
+        print 
+
+
+
+
+        
+#cmd_psrfits_subband = "/home/aridolfi/SOFT/psrfits_utils/installation/bin/psrfits_subband %s %s -dm %s -dstime %s -nsub %s -outbits %s -filelen 1000 -o %s %s" % (str_other_options, str_pol_option, dm, time_factor, output_nsub, out_nbits, outfile_name, ' '.join(list_files))
+cmd_psrfits_subband = "/home/aridolfi/SOFT/psrfits_utils/installation/bin/psrfits_subband %s %s -dm %s -dstime %s -nsub %s -outbits %s -filelen 1000 -o %s %s" % (str_other_options, str_pol_option, dm, time_factor, output_nsub, out_nbits, outfile_name, string_files)
+
+
+script_abspath = make_slurm_script(outfile_basename, log_abspath, cmd_psrfits_subband)
+
+
+if (verbosity_level >= 1):
+        print
+        print "Running:"
+        print
+        print cmd_psrfits_subband
+        print
+        print "\033[1m >> TIP:\033[0m Follow processing progress with: \033[1mtail -f %s\033[0m" % (log_abspath)
+        
+#execute_and_log(cmd_psrfits_subband, os.getcwd(), log_abspath, dict_envs={}, flag_append=0)
+
+
+exit()
+oldname = outfile_abspath
+newname = outfile_abspath.replace("_0001.fits", ".fits")
+
+print "Renaming '%s' --> '%s'" % (oldname, newname)
+os.rename(oldname, newname)

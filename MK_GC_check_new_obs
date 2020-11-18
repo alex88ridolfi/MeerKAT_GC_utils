@@ -1,0 +1,443 @@
+#!/usr/bin/env python2
+
+#################### ALESSANDRO RIDOLFI ########################
+
+
+import subprocess, warnings
+import os, os.path, sys, glob, time, datetime
+import numpy as np
+from astropy.time import Time
+
+if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    
+string_version = "0.2-alpha (02Mar2020)"
+
+def get_downsamp_params(obs_folder, time_factor, freq_factor):
+    obs_header_abspath = "%s/obs.header" % obs_folder
+    with open(obs_header_abspath, 'r') as file_obs_header:
+        for line in file_obs_header:
+                
+            if 'SEARCH_DM' in line:
+                DM_coherent_dedisp = line.split()[1]
+                #print "DM of coherent dedispersion = %s" % (DM_coherent_dedisp)
+            elif 'SOURCE' in line:
+                source_name = line.split()[1]
+                GC_name = array_clusters[np.where(array_pulsars==source_name)][0]
+                #print "Source name = %s --> GC name = %s" % (source_name, GC_name)
+            elif 'UTC_START' in line:
+                str_UTC_start = line.split()[1]
+                str_UTC_start_dateonly = str_UTC_start[:10]
+                t = Time(str_UTC_start_dateonly)
+                srt_MJD_start = "%d" % (t.mjd)
+                #print "MJD = %s" % (srt_MJD_start)
+            elif 'NCHAN' in line:
+                nchan = int(line.split()[1])
+                nchan_new = nchan /freq_factor
+                
+            elif 'SEARCH_OUTTSAMP' in line:
+                tsamp_us = np.float(line.split()[1])
+                tsamp_us_new = tsamp_us * time_factor
+                
+    dict_params = {'DM_coherent_dedisp': DM_coherent_dedisp, 'GC_name': GC_name, 'MJD': srt_MJD_start, 'nchan_new': nchan_new, 'tsamp_us_new': tsamp_us_new}
+    
+    return dict_params
+
+
+class Observation(object):
+        def __init__(self, file_name, data_type="psrfits"):
+                self.file_abspath = os.path.abspath(file_name)
+                self.file_nameonly = self.file_abspath.split("/")[-1]
+                self.file_basename, self.file_extension = os.path.splitext(self.file_nameonly)
+
+
+                if data_type=="psrfits":
+                        #print "Reading PSRFITS...."
+                        if psrfits.is_PSRFITS(file_name) == False:
+                                raise TypeError("ERROR: DATA_TYPE=\"psrfits\" but the input file \"%s\" does not seem to be a PSRFITS file!" % (file_name))
+
+                        object_file = psrfits.PsrfitsFile(self.file_abspath)
+                        self.bw_MHz           = object_file.specinfo.BW
+                        self.N_samples        = object_file.specinfo.N
+                        self.T_obs_s          = object_file.specinfo.T
+                        self.backend          = object_file.specinfo.backend
+                        self.nbits            = object_file.specinfo.bits_per_sample
+                        self.date_obs         = object_file.specinfo.date_obs
+                        self.dec_deg          = object_file.specinfo.dec2000
+                        self.dec_str          = object_file.specinfo.dec_str
+                        self.chanbw_MHz       = object_file.specinfo.df
+                        self.t_samp_s         = object_file.specinfo.dt
+                        self.freq_central_MHz = object_file.specinfo.fctr
+                        self.receiver         = object_file.specinfo.frontend
+                        self.freq_high_MHz    = object_file.specinfo.hi_freq
+                        self.freq_low_MHz     = object_file.specinfo.lo_freq
+                        self.MJD_int          = object_file.specinfo.mjd
+                        self.nchan            = object_file.specinfo.num_channels
+                        self.observer         = object_file.specinfo.observer
+                        self.project          = object_file.specinfo.project_id
+                        self.ra_deg           = object_file.specinfo.ra2000
+                        self.ra_str           = object_file.specinfo.ra_str
+                        self.seconds_of_day   = object_file.specinfo.secs
+                        self.source_name      = object_file.specinfo.source
+                        self.telescope        = object_file.specinfo.telescope
+                        self.dm               = object_file.specinfo.chan_dm
+
+
+
+
+def execute_and_log(command, work_dir, log_abspath, dict_envs={}, flag_append=0):
+        datetime_start = (datetime.datetime.now()).strftime("%Y/%m/%d  %H:%M")
+        time_start = time.time()
+        if flag_append == 1:
+                flag_open_mode = "a"
+        else:
+                flag_open_mode = "w+"
+        log_file = open("%s" % (log_abspath), flag_open_mode)
+
+        log_file.write("****************************************************************\n")
+        log_file.write("START DATE AND TIME: %s\n" % (datetime_start))
+        log_file.write("\nCOMMAND:\n")
+        log_file.write("%s\n\n" % (command))
+        log_file.write("WORKING DIRECTORY: %s\n" % (work_dir))
+        log_file.write("****************************************************************\n")
+        log_file.flush()
+
+        list_for_Popen = command.split()
+        env_subprocess = os.environ.copy()
+        if dict_envs: #If the dictionary is not empty                                                                                                       
+                for k in dict_envs.keys():
+                        env_subprocess[k] = dict_envs[k]
+
+        proc = subprocess.Popen(list_for_Popen, stdout=log_file, stderr=log_file, cwd=work_dir, env=env_subprocess)
+        proc.communicate()  #Wait for the process to complete
+
+        datetime_end = (datetime.datetime.now()).strftime("%Y/%m/%d  %H:%M")
+        time_end = time.time()
+
+        log_file.write("\nEND DATE AND TIME: %s\n" % (datetime_end))
+        log_file.write("\nTOTAL TIME TAKEN: %d s\n" % (time_end - time_start))
+        log_file.close()
+
+
+def get_command_output(command):
+        list_for_Popen = command.split()
+        proc = subprocess.Popen(list_for_Popen, stdout=subprocess.PIPE)
+        out, err = proc.communicate()
+        return out
+
+def get_command_output_with_pipe(command1, command2):
+        list_for_Popen_cmd1 = command1.split()
+        list_for_Popen_cmd2 = command2.split()
+        p1 = subprocess.Popen(list_for_Popen_cmd1, stdout=subprocess.PIPE)
+        p2 = subprocess.Popen(list_for_Popen_cmd2, stdin=p1.stdout, stdout=subprocess.PIPE)
+        p1.stdout.close()  # Allow p1 to receive a SIGPIPE if p2 exits.
+        out, err = p2.communicate()
+        return out
+
+
+        
+
+###################################################
+# DEFAULT PARAMETERS
+###################################################
+verbosity_level = 1
+str_other_options = ""
+flag_log = 1
+total_run_time = 0
+out_nbits = 8
+outfile_basename = ""
+data_root_dir = "/fred/oz005/search"
+downsamp_obs_dir = "/fred/oz005/users/ridolfi/GCs_76us_c256_onlyI"
+configfile_abspath = ""
+
+
+###################################################
+# SHELL ARGUMENTS
+###################################################
+if (len(sys.argv) == 1 or ("-h" in sys.argv) or ("-help" in sys.argv) or ("--help" in sys.argv)):
+	print "USAGE: %s -config <configfile.txt> -list_GCs list_clusters.txt [-data_root_dir /fred/oz005/search] [-downsamp_obs_dir ]" % (os.path.basename(sys.argv[0]))
+        print
+        print "%15s    %-40s:  %-50s" % ("-h", "", "Print help")
+        print "%15s    %-40s:  %-50s %s" % ("-list_GCs", "\"<list_GC.txt>\"", "File containing pulsar name + cluster name", "")
+        print "%15s    %-40s:  %-50s %s" % ("-data_root_dir", "/path/to/searchmodedata\ [default: /fred/oz005/search]", "", "")
+        print "%15s    %-40s:  %-50s %s" % ("-downsamp_obs_dir", "/path/to/downsampled/data\ [default: /fred/oz005/users/ridolfi/GCs_76us_c256_onlyI]", "", "")
+        print "%15s    %-40s:  %-50s" % ("-Q", "", "Quiet mode - do not print anything")
+        print "%15s    %-40s:  %-50s" % ("-V", "", "Very verbose mode - print many info to debug issues")
+        print "%15s    %-40s:  %-50s" % ("-version", "", "Print the version of this code")
+	exit()
+else:
+	for j in range( 1, len(sys.argv)):
+                if (sys.argv[j] == "-config"):
+                        configfile_abspath = os.path.abspath(sys.argv[j+1])
+                        
+                elif (sys.argv[j] == "-list_GCs"):
+                        list_GCs_abspath = os.path.abspath(sys.argv[j+1])
+
+                elif (sys.argv[j] == "-data_root_dir"):
+                        data_root_dir = os.path.abspath(sys.argv[j+1])
+                elif (sys.argv[j] == "-downsamp_obs_dir"):
+                        downsamp_obs_dir = os.path.abspath(sys.argv[j+1])
+                        
+                elif (sys.argv[j] == "-Q"):
+                        verbosity_level = 0
+
+                elif (sys.argv[j] == "-V"):
+                        verbosity_level = 2
+
+                elif (sys.argv[j] == "-version") or (sys.argv[j] == "--version") or (sys.argv[j] == "-v"):
+                        print "Version: %s" % (string_version)
+                        exit()
+
+
+launch_dir = os.getcwd()
+
+list_allowed_hours = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+wait_time_interval_s = 900
+array_pulsars, array_clusters = np.loadtxt(list_GCs_abspath, skiprows=0, unpack=True, dtype=np.str)
+
+
+
+
+#print "array_pulsars = ", array_pulsars
+#print "array_clusters = ", array_clusters
+
+if configfile_abspath == "":
+    print "ERROR! You must specify a config file, containing the basic informations needed for the downsample."
+    print
+    print "Example config file:"
+    print
+    print "DOWNSAMP_TIME_FACTOR                 8"
+    print "DOWNSAMP_FREQ_FACTOR                 3"
+    print "OUTBITS                              8"
+    print "STOKES                               onlyI    # FullStokes / onlyI"
+    print "OTHER_FLAGS_PSRFITS_SUBBAND          ''                          "
+    print "OUTFILENAME_SUFFIX                   ''                          "
+    
+    exit()
+
+else:
+    time_factor = -1
+    freq_factor = -1
+    outbits = -1
+    flag_stokes = "-"
+    flag_others = ""
+    outfilename_suffix = ""
+
+    if (verbosity_level >= 1):
+        print "Reading downsample configuration from '%s'" % (configfile_abspath)
+    with open(configfile_abspath, 'r') as configfile:
+        for line in configfile:
+	    if 'DOWNSAMP_TIME_FACTOR' in line:
+                time_factor = int(line.split()[1])
+            elif 'DOWNSAMP_FREQ_FACTOR' in line:
+                freq_factor = int(line.split()[1])
+            elif 'OUTBITS' in line:
+                outbits = int(line.split()[1])
+            elif 'STOKES' in line:
+                str_stokes = line.split()[1]
+                if str_stokes == "FS":
+                    flag_stokes = ""
+                    flag_stokes_MK_GC_shrink_psrfits = "full_stokes"
+                elif str_stokes == "onlyI":
+                    flag_stokes = "-onlyI"
+                    flag_stokes_MK_GC_shrink_psrfits = "total_intensity"
+                else:
+                    print "ERROR! Config parameter STOKES must be either 'FS' or 'onlyI'. Read '%s' instead. " % (str_stokes)
+                    exit()
+            elif 'OTHER_FLAGS_PSRFITS_SUBBAND' in line:
+                flag_others = line.split()[1]
+                str_other_options = "-other_options %s" % flag_others
+            elif 'OUTFILENAME_SUFFIX' in line:
+                outfilename_suffix = line.split()[1]
+
+    print
+    print
+    print
+    print "%30s = %d" % ("Downsample time factor", time_factor)
+    print "%30s = %d" % ("Downsample freq factor", freq_factor)
+    print "%30s = %d" % ("Output number of bits", outbits)
+    print "%30s = %s" % ("Requested Stokes", str_stokes)
+    print "%30s = %s" % ("Other psrfits_subband flags", flag_others)
+
+
+T_start = time.time()
+
+
+while (1):
+    current_date = datetime.datetime.now()
+    print "Current hour = %d" % (current_date.hour)
+
+    if current_date.hour in list_allowed_hours:
+        print "Good! Hour is among those of your choice. Proceeding..."
+        print 
+        
+        N_pulsars = len(array_pulsars)
+        if (verbosity_level >= 1):
+            print
+            print "Reading list of pulsars-GCs from '%s'" % (list_GCs_abspath)
+            print
+            for i in range(N_pulsars):
+                print "Pulsar '%s' ---> GC '%s'" % (array_pulsars[i], array_clusters[i]) 
+
+        dict_GC_mjds = {}
+
+        #########################################################################################################################
+        # First I scan all possible directories and make a dictionary with GC, MJD, # of obs per MJD
+        #########################################################################################################################
+
+
+        for i in range(N_pulsars):
+            PSR_name = array_pulsars[i]
+            path_to_check = os.path.join(data_root_dir, PSR_name)
+            if (verbosity_level >= 1):
+                print
+                print
+                print "Checking if '%s' exists..." % (path_to_check), ; sys.stdout.flush()
+            if os.path.exists(path_to_check):
+                if (verbosity_level >= 1): print "yes."
+                flag_path_exists = 1
+            else:
+                if (verbosity_level >= 1): print "no."
+                flag_path_exists = 0
+
+            if flag_path_exists == 1:
+                list_subdirs_all = sorted(glob.glob("%s/*/*" % path_to_check))
+                list_subdirs = [x for x in list_subdirs_all if os.path.isdir(x)]
+                if (verbosity_level >= 1):
+                    print "Subdirectories:"
+                    for j in range(len(list_subdirs)):
+                        if (verbosity_level >= 1):
+                            print "   -> %s" % (list_subdirs[j])
+                        os.chdir(list_subdirs[j])
+                        if (verbosity_level >= 1):
+                            print "   Now I am in %s" % (os.getcwd())
+                            print
+                            print "  Checking if 'obs.finished' and 'obs.header' are there...", ; sys.stdout.flush()
+
+                            obs_header_abspath = "%s/obs.header" % os.getcwd()
+                            obs_finished_abspath = "%s/obs.finished" % os.getcwd()
+
+                            if os.path.exists(obs_header_abspath):
+                                if (verbosity_level >= 1):
+                                    print "yes."
+                                    print "Opening '%s'..." % (obs_header_abspath)
+
+                                DM_coherent_dedisp = ""
+                                source_name = ""
+                                srt_MJD_start = ""
+
+                                with open(obs_header_abspath, 'r') as file_obs_header:
+                                    for line in file_obs_header:
+
+                                        if 'SEARCH_DM' in line:
+                                            DM_coherent_dedisp = line.split()[1]
+                                            print "DM of coherent dedispersion = %s" % (DM_coherent_dedisp)
+                                        elif 'SOURCE' in line:
+                                            source_name = line.split()[1]
+                                            GC_name = array_clusters[np.where(array_pulsars==source_name)][0]
+                                            print "Source name = %s --> GC name = %s" % (source_name, GC_name)
+                                        elif 'UTC_START' in line:
+                                            str_UTC_start = line.split()[1]
+                                            str_UTC_start_dateonly = str_UTC_start[:10]
+                                            t = Time(str_UTC_start_dateonly)
+                                            srt_MJD_start = "%d" % (t.mjd)
+                                            print "MJD = %s" % (srt_MJD_start)
+                                        elif 'NCHAN' in line:
+                                            nchan = int(line.split()[1])
+                                            nchan_new = nchan /freq_factor
+
+                                        elif 'SEARCH_OUTTSAMP' in line:
+                                            tsamp_us = np.float(line.split()[1])
+                                            tsamp_us_new = tsamp_us * time_factor
+
+
+                                    if not GC_name in dict_GC_mjds:
+                                        dict_GC_mjds[GC_name] = {}
+
+
+                                    
+
+                                    if not srt_MJD_start in dict_GC_mjds[GC_name]:
+                                        dict_GC_mjds[GC_name][srt_MJD_start] = {'obs_folder': [os.getcwd()] }
+                                    else:
+                                        dict_GC_mjds[GC_name][srt_MJD_start]['obs_folder'].append(os.getcwd()) 
+
+
+                                    #print "dict_GC_mjds = ", dict_GC_mjds
+                                    print
+
+                            else:
+                                print "nope."
+
+        print
+        print
+        print
+
+        list_outfiles = []
+
+        list_decimate_queue_cmds = []
+
+        for cluster in sorted(dict_GC_mjds.keys()):
+            print
+            print "***********************************************"
+            print "CLUSTER: %s" % (cluster)
+            print
+
+            N_MJD = len(dict_GC_mjds[cluster].keys())
+            for MJD,obs_num in zip(sorted(dict_GC_mjds[cluster].keys()), range(1,N_MJD+1)) :
+                N_obs = len(dict_GC_mjds[cluster][MJD]['obs_folder'])
+                for obs,k in zip(sorted(dict_GC_mjds[cluster][MJD]['obs_folder']), range(1,N_obs+1)):
+                    print "   %10s --> obs #%02d: %s (%d of %d)" % (MJD, obs_num, obs, k, N_obs)
+                    dict_params = get_downsamp_params(obs, time_factor, freq_factor)
+                    if N_obs >1:
+                        str_part = "_%dof%d" %(k, N_obs)
+                    else:
+                        str_part = ""
+
+                    output_filename = "%s_MK_%02d_%s_%dus_c%d_%s%s%s.fits" % (dict_params['GC_name'], obs_num, dict_params['MJD'], dict_params['tsamp_us_new'], dict_params['nchan_new'], str_stokes, str_part, outfilename_suffix)
+                    output_file_basename = os.path.splitext(output_filename)[0]
+                    output_file_abspath = os.path.join(downsamp_obs_dir, output_filename)
+                    output_file_abspath_basename = os.path.splitext(output_file_abspath)[0]
+                    #print
+                    #print "output_file_abspath = \033[1m %s \033[0m" % output_file_abspath
+                    if os.path.exists(output_file_abspath):
+                        print "\033[1m '%s' already exists! Skipping... \033[0m" % (output_file_abspath)
+                    else:
+                        print "\033[1m '%s' does NOT exist! Adding downsampling to the queue... \033[0m" % (output_file_abspath)
+                        str_input_files = "%s/*.sf" %(obs)
+                        cmd = "MK_GC_shrink_psrfits %s -time_factor %d -freq_factor %d -nbits  %d -pol %s -o '%s' -files '%s'" % (str_other_options, int(time_factor), int(freq_factor), int(outbits), flag_stokes_MK_GC_shrink_psrfits, output_file_abspath_basename, str_input_files)
+                        list_decimate_queue_cmds.append(cmd)
+
+        print
+        print
+        print "###################################################################"
+        print
+        for i in range(len(list_decimate_queue_cmds)):
+            print "%s" % (list_decimate_queue_cmds[i])
+
+
+
+        os.chdir(launch_dir)
+
+
+        print
+        print "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+        for i in range(len(list_decimate_queue_cmds)):
+            current_cmd = "%s" % (list_decimate_queue_cmds[i])
+            print
+            print "From %s, launching: " % (os.getcwd())
+            print "%s" % (current_cmd)
+            print 
+            os.system(current_cmd)
+
+
+
+
+    print "Waiting another %d seconds..." % (wait_time_interval_s)        
+    time.sleep(wait_time_interval_s)
+        
+
+
+
+exit()
+
