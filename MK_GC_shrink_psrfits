@@ -12,7 +12,7 @@ import psrfits
 if not sys.warnoptions:
     warnings.simplefilter("ignore")
     
-string_version = "0.2-alpha (02Mar2020)"
+string_version = "1.0-beta (12Feb2021)"
 
 def make_slurm_script(basename, log_filename, cmd_psrfits_subband):
     slurm_script_filename = "script_slurm_%s.txt" % (basename)
@@ -75,7 +75,9 @@ class Observation(object):
 
 
 def execute_and_log(command, work_dir, log_abspath, dict_envs={}, flag_append=0):
+
         datetime_start = (datetime.datetime.now()).strftime("%Y/%m/%d  %H:%M")
+        datetime_start_single_string = (datetime.datetime.now()).strftime("%Y%m%d_%H%M")
         time_start = time.time()
         if flag_append == 1:
                 flag_open_mode = "a"
@@ -92,6 +94,15 @@ def execute_and_log(command, work_dir, log_abspath, dict_envs={}, flag_append=0)
         log_file.flush()
 
         list_for_Popen = command.split()
+        for i in range(len(list_for_Popen)):
+                current_piece = list_for_Popen[i]
+
+                if "?" in current_piece or "*" in current_piece:
+                        new_list_for_Popen  = list_for_Popen[:i] +  sorted(glob.glob(current_piece)) + list_for_Popen[i+1:]
+
+                        list_for_Popen = new_list_for_Popen
+
+        print "list_for_Popen = ", list_for_Popen
         env_subprocess = os.environ.copy()
         if dict_envs: #If the dictionary is not empty                                                                                                       
                 for k in dict_envs.keys():
@@ -278,7 +289,7 @@ log_abspath = os.path.join(os.path.dirname(outfile_abspath), "LOG-MK_GC_shrink_p
 
 if verbosity_level >= 1:
         print
-        print "Check consistency of files...",
+        print "Check consistency of files...",; sys.stdout.flush()
 
 for i in range(N_files):
         current_obs = Observation(list_files[i])
@@ -343,12 +354,14 @@ if (verbosity_level >= 1):
         print
         print "\033[1m >> TIP:\033[0m Follow processing progress with: \033[1mtail -f %s\033[0m" % (log_abspath)
         
-#execute_and_log(cmd_psrfits_subband, os.getcwd(), log_abspath, dict_envs={}, flag_append=0)
+execute_and_log(cmd_psrfits_subband, os.getcwd(), log_abspath, dict_envs={}, flag_append=0)
 
 
-exit()
+
 oldname = outfile_abspath
 newname = outfile_abspath.replace("_0001.fits", ".fits")
 
 print "Renaming '%s' --> '%s'" % (oldname, newname)
 os.rename(oldname, newname)
+print
+print "Done!"
